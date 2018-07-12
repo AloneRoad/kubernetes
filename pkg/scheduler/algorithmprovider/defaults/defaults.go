@@ -139,6 +139,13 @@ func defaultPredicates() sets.String {
 				return predicates.NewMaxPDVolumeCountPredicate(predicates.AzureDiskVolumeFilterType, args.PVInfo, args.PVCInfo)
 			},
 		),
+		// Fit is determined by whether or not there would be too many AliCloud Disk volumes attached to the node
+		factory.RegisterFitPredicateFactory(
+			predicates.MaxAliDiskVolumeCountPred,
+			func(args factory.PluginFactoryArgs) algorithm.FitPredicate {
+				return predicates.NewMaxPDVolumeCountPredicate(predicates.AliDiskVolumeFilterType, args.PVInfo, args.PVCInfo)
+			},
+		),
 		// Fit is determined by inter-pod affinity.
 		factory.RegisterFitPredicateFactory(
 			predicates.MatchInterPodAffinityPred,

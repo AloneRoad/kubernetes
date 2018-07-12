@@ -83,6 +83,8 @@ const (
 	MaxGCEPDVolumeCountPred = "MaxGCEPDVolumeCount"
 	// MaxAzureDiskVolumeCountPred defines the name of predicate MaxAzureDiskVolumeCount.
 	MaxAzureDiskVolumeCountPred = "MaxAzureDiskVolumeCount"
+	// MaxAliDiskVolumeCountPred defines the name of predicate MaxAliDiskVolumeCount.
+	MaxAliDiskVolumeCountPred = "MaxAliDiskVolumeCount"
 	// NoVolumeZoneConflictPred defines the name of predicate NoVolumeZoneConflict.
 	NoVolumeZoneConflictPred = "NoVolumeZoneConflict"
 	// CheckNodeMemoryPressurePred defines the name of predicate CheckNodeMemoryPressure.
@@ -101,6 +103,8 @@ const (
 	// Larger Azure VMs can actually have much more disks attached.
 	// TODO We should determine the max based on VM size
 	DefaultMaxAzureDiskVolumes = 16
+	// DefaultMaxAliDiskVolumes is the limit for disks attached to an instance.
+	DefaultMaxAliDiskVolumes = 15
 
 	// KubeMaxPDVols defines the maximum number of PD Volumes per kubelet
 	KubeMaxPDVols = "KUBE_MAX_PD_VOLS"
@@ -111,6 +115,8 @@ const (
 	GCEPDVolumeFilterType = "GCE"
 	// AzureDiskVolumeFilterType defines the filter name for AzureDiskVolumeFilter.
 	AzureDiskVolumeFilterType = "AzureDisk"
+	// AliDiskVolumeFilterType defines the filter name for AliDiskVolumeFilter.
+	AliDiskVolumeFilterType = "AliDisk"
 )
 
 // IMPORTANT NOTE for predicate developers:
@@ -132,7 +138,7 @@ var (
 		MatchNodeSelectorPred, PodFitsResourcesPred, NoDiskConflictPred,
 		PodToleratesNodeTaintsPred, PodToleratesNodeNoExecuteTaintsPred, CheckNodeLabelPresencePred,
 		CheckServiceAffinityPred, MaxEBSVolumeCountPred, MaxGCEPDVolumeCountPred,
-		MaxAzureDiskVolumeCountPred, CheckVolumeBindingPred, NoVolumeZoneConflictPred,
+		MaxAzureDiskVolumeCountPred, MaxAliDiskVolumeCountPred, CheckVolumeBindingPred, NoVolumeZoneConflictPred,
 		CheckNodeMemoryPressurePred, CheckNodeDiskPressurePred, MatchInterPodAffinityPred}
 )
 
@@ -326,9 +332,12 @@ func NewMaxPDVolumeCountPredicate(filterName string, pvInfo PersistentVolumeInfo
 	case AzureDiskVolumeFilterType:
 		filter = AzureDiskVolumeFilter
 		maxVolumes = getMaxVols(DefaultMaxAzureDiskVolumes)
+	case AliDiskVolumeFilterType:
+		filter = AliDiskVolumeFilter
+		maxVolumes = getMaxVols(DefaultMaxAliDiskVolumes)
 	default:
 		glog.Fatalf("Wrong filterName, Only Support %v %v %v ", EBSVolumeFilterType,
-			GCEPDVolumeFilterType, AzureDiskVolumeFilterType)
+			GCEPDVolumeFilterType, AzureDiskVolumeFilterType, AliDiskVolumeFilterType)
 		return nil
 
 	}
@@ -362,8 +371,10 @@ func (c *MaxPDVolumeCountChecker) filterVolumes(volumes []v1.Volume, namespace s
 
 	for i := range volumes {
 		vol := &volumes[i]
+
 		if id, ok := c.filter.FilterVolume(vol); ok {
 			filteredVolumes[id] = true
+			glog.V(5).Infof("v id: %v", id)
 		} else if vol.PersistentVolumeClaim != nil {
 			pvcName := vol.PersistentVolumeClaim.ClaimName
 			if pvcName == "" {
@@ -405,6 +416,7 @@ func (c *MaxPDVolumeCountChecker) filterVolumes(volumes []v1.Volume, namespace s
 
 			if id, ok := c.filter.FilterPersistentVolume(pv); ok {
 				filteredVolumes[id] = true
+				glog.V(5).Infof("pv id: %v", id)
 			}
 		}
 	}
@@ -437,6 +449,7 @@ func (c *MaxPDVolumeCountChecker) predicate(pod *v1.Pod, meta algorithm.Predicat
 		}
 	}
 	numExistingVolumes := len(existingVolumes)
+	glog.V(5).Infof("numExistingVolumes: %v", numExistingVolumes)
 
 	// filter out already-mounted volumes
 	for k := range existingVolumes {
@@ -446,6 +459,7 @@ func (c *MaxPDVolumeCountChecker) predicate(pod *v1.Pod, meta algorithm.Predicat
 	}
 
 	numNewVolumes := len(newVolumes)
+	glog.V(5).Infof("numNewVolumes: %v", numNewVolumes)
 
 	if numExistingVolumes+numNewVolumes > c.maxVolumes {
 		// violates MaxEBSVolumeCount or MaxGCEPDVolumeCount
@@ -453,6 +467,23 @@ func (c *MaxPDVolumeCountChecker) predicate(pod *v1.Pod, meta algorithm.Predicat
 	}
 
 	return true, nil, nil
+}
+
+// AliDiskVolumeFilter is a VolumeFilter for filtering AliDisk Flex Volumes
+var AliDiskVolumeFilter = VolumeFilter{
+	FilterVolume: func(vol *v1.Volume) (string, bool) {
+		if vol.FlexVolume != nil {
+			return vol.FlexVolume.Options["diskId"], true
+		}
+		return "", false
+	},
+
+	FilterPersistentVolume: func(pv *v1.PersistentVolume) (string, bool) {
+		if pv.Spec.FlexVolume != nil {
+			return pv.Spec.FlexVolume.Options["diskId"], true
+		}
+		return "", false
+	},
 }
 
 // EBSVolumeFilter is a VolumeFilter for filtering AWS ElasticBlockStore Volumes
